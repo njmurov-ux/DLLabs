@@ -81,6 +81,8 @@ def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmo
     
     # Add first (Input) layer, requires input shape
     model.add(Input(shape=input_shape))
+
+    DropoutLayer = myDropout if use_custom_dropout else Dropout
     
     # Add remaining layers. These to not require the input shape since it will be infered during model compile
     for _ in range(n_hidden_layers):
@@ -93,7 +95,7 @@ def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmo
             
         # Dropout is typically applied after the activation in feedforward nets
         if use_dropout:
-            model.add(Dropout(rate=dropout_rate))
+            model.add(DropoutLayer(rate=dropout_rate))
     
     # Add final layer
     model.add(Dense(1, activation="sigmoid"))  # typical binary classifier output
