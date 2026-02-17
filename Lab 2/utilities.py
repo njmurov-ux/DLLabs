@@ -7,6 +7,8 @@ except ImportError:
     from tensorflow import keras
     USING_TF_KERAS_PKG = False
 import tensorflow_probability as tfp
+tfpl = tfp.layers
+tfd = tfp.distributions
 
 # from tf_keras.models import Sequential, Model
 # from tf_keras.layers import Input, Dense, BatchNormalization, Dropout
@@ -38,7 +40,8 @@ from sklearn.metrics import precision_score, recall_score, f1_score, confusion_m
 # =======================================
 # DEEP LEARNING MODEL BUILD FUNCTION
 def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmoid', optimizer:str='sgd', learning_rate=0.01, 
-            use_bn=False, use_dropout=False, dropout_rate=0.5, use_custom_dropout=False, print_summary=False, use_variational_layer=False):
+            use_bn=False, use_dropout=False, dropout_rate=0.5, use_custom_dropout=False, print_summary=False, 
+            use_variational_layer=False, kl_weight=None, kl_use_exact=False):
     """
     Builds a Deep Neural Network (DNN) model based on the provided parameters.
     
@@ -53,6 +56,9 @@ def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmo
     use_bn (bool, optional): Whether to use Batch Normalization after each layer. Default is False.
     use_dropout (bool, optional): Whether to use Dropout after each layer. Default is False.
     use_custom_dropout (bool, optional): Whether to use a custom Dropout implementation. Default is False.
+    use_variational_layer (bool, optional): Use DenseVariational layer for BMM training
+    kl_weight (float, optional): scaling for KL term
+    kl_use_exact (bool, optional): exact vs estimated KL computation
     
     Returns:
     model (Sequential): Compiled Keras Sequential model.
@@ -84,14 +90,27 @@ def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmo
 
     DropoutLayer = myDropout if use_custom_dropout else Dropout
     
+    def DenseLayer(units, activation=None, use_bias=True):
+        if not use_variational_layer:
+            return Dense(units, activation=activation, use_bias=use_bias)
+        return tfpl.DenseVariational(
+            units=units,
+            make_posterior_fn=posterior,
+            make_prior_fn=prior,
+            kl_weight=kl_weight,
+            kl_use_exact=kl_use_exact,
+            activation=activation,
+            use_bias=use_bias,
+        )
+    
     # Add remaining layers. These to not require the input shape since it will be infered during model compile
     for _ in range(n_hidden_layers):
         if use_bn:
-            model.add(Dense(n_hidden_units, activation=None, use_bias=False))
+            model.add(DenseLayer(n_hidden_units, activation=None, use_bias=False))
             model.add(BatchNormalization())
             model.add(Activation(act_fun))
         else:
-            model.add(Dense(n_hidden_units, activation=act_fun))
+            model.add(DenseLayer(n_hidden_units, activation=act_fun))
             
         # Dropout is typically applied after the activation in feedforward nets
         if use_dropout:
@@ -165,33 +184,53 @@ class myDropout(keras.layers.Dropout):
 # CUSTOM PRIOR AND POSTERIOR FUNCTIONS FOR THE VARIATIONAL LAYER
 #  Code from https://keras.io/examples/keras_recipes/bayesian_neural_networks/
 # The prior is defined as a normal distribution with zero mean and unit variance.
+# def prior(kernel_size, bias_size, dtype=None):
+#     n = kernel_size + bias_size
+#     prior_model = keras.Sequential(
+#         [
+#             tfp.layers.DistributionLambda(
+#                 lambda t: tfp.distributions.MultivariateNormalDiag(
+#                     loc=tf.zeros(n), scale_diag=tf.ones(n)
+#                 )
+#             )
+#         ]
+#     )
+#     return prior_model
+
+
+# # multivariate Gaussian distribution parametrized by a learnable parameters.
+# def posterior(kernel_size, bias_size, dtype=None):
+#     n = kernel_size + bias_size
+#     posterior_model = keras.Sequential(
+#         [
+#             tfp.layers.VariableLayer(
+#                 tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
+#             ),
+#             tfp.layers.MultivariateNormalTriL(n),
+#         ]
+#     )
+#     return posterior_model
+
+# Had to change the distribution type due to persistent integer overflow errors
+# Apparently the MultivariateNormalTriL was creating an insanely large 
+# covariance matrix
 def prior(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
-    prior_model = keras.Sequential(
-        [
-            tfp.layers.DistributionLambda(
-                lambda t: tfp.distributions.MultivariateNormalDiag(
-                    loc=tf.zeros(n), scale_diag=tf.ones(n)
-                )
+    return keras.Sequential([
+        tfpl.DistributionLambda(
+            lambda t: tfd.Independent(
+                tfd.Normal(loc=tf.zeros(n, dtype=dtype), scale=1.0),
+                reinterpreted_batch_ndims=1
             )
-        ]
-    )
-    return prior_model
+        )
+    ])
 
-
-# multivariate Gaussian distribution parametrized by a learnable parameters.
 def posterior(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
-    posterior_model = keras.Sequential(
-        [
-            tfp.layers.VariableLayer(
-                tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
-            ),
-            tfp.layers.MultivariateNormalTriL(n),
-        ]
-    )
-    return posterior_model
-
+    return keras.Sequential([
+        tfpl.VariableLayer(tfpl.IndependentNormal.params_size(n), dtype=dtype),
+        tfpl.IndependentNormal(n),
+    ])
 
 # =======================================
 # PLOTTING FUNCTIONS
