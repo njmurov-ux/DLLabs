@@ -1,18 +1,19 @@
 # IMPORTS
 import tensorflow as tf
-import tf_keras as keras
+try:
+    import tf_keras as keras
+    USING_TF_KERAS_PKG = True
+except ImportError:
+    from tensorflow import keras
+    USING_TF_KERAS_PKG = False
 import tensorflow_probability as tfp
 from tensorflow_probability.python.layers import DenseVariational
 
-from tf_keras.models import Sequential, Model
-from tf_keras.layers import Input, Dense, BatchNormalization, Dropout, Activation
+from keras.models import Sequential, Model
+from keras.layers import Input, Dense, BatchNormalization, Dropout, Activation
 
-# Use legacy for M1 Mac
-LEGACY = True
-if LEGACY:
-    from tf_keras.optimizers.legacy import SGD, Adam
-else:
-    from tf_keras.optimizers import SGD, Adam
+
+from keras.optimizers import SGD, Adam
 
 from ray import train
 
@@ -22,6 +23,9 @@ from numpy.random import seed
 seed(123)
 
 import matplotlib.pyplot as plt
+
+tfpl = tfp.layers
+tfd = tfp.distributions
 
 
 # =======================================
@@ -170,33 +174,61 @@ class myDropout(keras.layers.Dropout):
 # CUSTOM PRIOR AND POSTERIOR FUNCTIONS FOR THE VARIATIONAL LAYER
 #  Code from https://keras.io/examples/keras_recipes/bayesian_neural_networks/
 # The prior is defined as a normal distribution with zero mean and unit variance.
+# def prior(kernel_size, bias_size, dtype=None):
+#     n = kernel_size + bias_size
+#     prior_model = keras.Sequential(
+#         [
+#             tfp.layers.DistributionLambda(
+#                 lambda t: tfp.distributions.MultivariateNormalDiag(
+#                     loc=tf.zeros(n), scale_diag=tf.ones(n)
+#                 )
+#             )
+#         ]
+#     )
+#     return prior_model
+
+# def prior(kernel_size, bias_size, dtype=None):
+#     n = kernel_size + bias_size
+#     return keras.Sequential([
+#         tfp.layers.DistributionLambda(
+#             lambda t: tfp.distributions.MultivariateNormalDiag(
+#                 loc=tf.zeros(n, dtype=dtype),
+#                 scale_diag=tf.ones(n, dtype=dtype),
+#             )
+#         )
+#     ])
+
+
+# # multivariate Gaussian distribution parametrized by a learnable parameters.
+# def posterior(kernel_size, bias_size, dtype=None):
+#     n = kernel_size + bias_size
+#     posterior_model = keras.Sequential(
+#         [
+#             tfp.layers.VariableLayer(
+#                 tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
+#             ),
+#             tfp.layers.MultivariateNormalTriL(n),
+#         ]
+#     )
+#     return posterior_model
+
 def prior(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
-    prior_model = keras.Sequential(
-        [
-            tfp.layers.DistributionLambda(
-                lambda t: tfp.distributions.MultivariateNormalDiag(
-                    loc=tf.zeros(n), scale_diag=tf.ones(n)
-                )
+    return keras.Sequential([
+        tfpl.DistributionLambda(
+            lambda t: tfd.Independent(
+                tfd.Normal(loc=tf.zeros(n, dtype=dtype), scale=1.0),
+                reinterpreted_batch_ndims=1
             )
-        ]
-    )
-    return prior_model
+        )
+    ])
 
-
-# multivariate Gaussian distribution parametrized by a learnable parameters.
 def posterior(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
-    posterior_model = keras.Sequential(
-        [
-            tfp.layers.VariableLayer(
-                tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
-            ),
-            tfp.layers.MultivariateNormalTriL(n),
-        ]
-    )
-    return posterior_model
-
+    return keras.Sequential([
+        tfpl.VariableLayer(tfpl.IndependentNormal.params_size(n), dtype=dtype),
+        tfpl.IndependentNormal(n),
+    ])
 
 # =======================================
 # PLOTTING FUNCTIONS
