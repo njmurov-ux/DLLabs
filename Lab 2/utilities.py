@@ -35,7 +35,7 @@ tfd = tfp.distributions
 def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmoid', optimizer: str = 'sgd',
               learning_rate=0.01,
               use_bn=False, use_dropout=False, use_custom_dropout=False, print_summary=False,
-              use_variational_layer=False, kl_weight=None):
+              use_variational_layer=False, mean_field=False, kl_weight=None):
     """
     Builds a Deep Neural Network (DNN) model based on the provided parameters.
 
@@ -78,9 +78,16 @@ def build_DNN(input_shape, n_hidden_layers, n_hidden_units, loss, act_fun='sigmo
     for _ in range(n_hidden_layers):
 
         if use_variational_layer:
+            if mean_field:
+                prior_func = prior_mean_field
+                posterior_func = posterior_mean_field
+            else:
+                prior_func = prior
+                posterior_func = posterior            
+                
             dense = DenseVariational(n_hidden_units,
-                                                make_prior_fn=prior,
-                                                make_posterior_fn=posterior,
+                                                make_prior_fn=prior_func,
+                                                make_posterior_fn=posterior_func,
                                                 kl_weight=kl_weight,
                                                 kl_use_exact=True,
                                                 activation=(None if use_bn else act_fun),
@@ -174,45 +181,34 @@ class myDropout(keras.layers.Dropout):
 # CUSTOM PRIOR AND POSTERIOR FUNCTIONS FOR THE VARIATIONAL LAYER
 #  Code from https://keras.io/examples/keras_recipes/bayesian_neural_networks/
 # The prior is defined as a normal distribution with zero mean and unit variance.
-# def prior(kernel_size, bias_size, dtype=None):
-#     n = kernel_size + bias_size
-#     prior_model = keras.Sequential(
-#         [
-#             tfp.layers.DistributionLambda(
-#                 lambda t: tfp.distributions.MultivariateNormalDiag(
-#                     loc=tf.zeros(n), scale_diag=tf.ones(n)
-#                 )
-#             )
-#         ]
-#     )
-#     return prior_model
-
-# def prior(kernel_size, bias_size, dtype=None):
-#     n = kernel_size + bias_size
-#     return keras.Sequential([
-#         tfp.layers.DistributionLambda(
-#             lambda t: tfp.distributions.MultivariateNormalDiag(
-#                 loc=tf.zeros(n, dtype=dtype),
-#                 scale_diag=tf.ones(n, dtype=dtype),
-#             )
-#         )
-#     ])
-
-
-# # multivariate Gaussian distribution parametrized by a learnable parameters.
-# def posterior(kernel_size, bias_size, dtype=None):
-#     n = kernel_size + bias_size
-#     posterior_model = keras.Sequential(
-#         [
-#             tfp.layers.VariableLayer(
-#                 tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
-#             ),
-#             tfp.layers.MultivariateNormalTriL(n),
-#         ]
-#     )
-#     return posterior_model
-
 def prior(kernel_size, bias_size, dtype=None):
+    n = kernel_size + bias_size
+    prior_model = keras.Sequential(
+        [
+            tfp.layers.DistributionLambda(
+                lambda t: tfp.distributions.MultivariateNormalDiag(
+                    loc=tf.zeros(n), scale_diag=tf.ones(n)
+                )
+            )
+        ]
+    )
+    return prior_model
+
+
+# multivariate Gaussian distribution parametrized by a learnable parameters.
+def posterior(kernel_size, bias_size, dtype=None):
+    n = kernel_size + bias_size
+    posterior_model = keras.Sequential(
+        [
+            tfp.layers.VariableLayer(
+                tfp.layers.MultivariateNormalTriL.params_size(n), dtype=dtype
+            ),
+            tfp.layers.MultivariateNormalTriL(n),
+        ]
+    )
+    return posterior_model
+
+def prior_mean_field(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
     return keras.Sequential([
         tfpl.DistributionLambda(
@@ -223,7 +219,7 @@ def prior(kernel_size, bias_size, dtype=None):
         )
     ])
 
-def posterior(kernel_size, bias_size, dtype=None):
+def posterior_mean_field(kernel_size, bias_size, dtype=None):
     n = kernel_size + bias_size
     return keras.Sequential([
         tfpl.VariableLayer(tfpl.IndependentNormal.params_size(n), dtype=dtype),
